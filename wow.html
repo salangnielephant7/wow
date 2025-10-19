@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>필통 자비스 (Teachable Machine 로컬 모델)</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-image.min.js"></script>
+
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; max-width: 1000px; margin: 28px auto; padding: 0 18px; color:#222; }
+    h1 { margin-bottom: 6px; }
+    p.lead { color:#555; margin-top:0; }
+
+    .controls { margin:18px 0; }
+    input[type="file"] { padding:6px; }
+
+    #preview { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; }
+    .thumb {
+      width:160px; border:1px solid #e0e0e0; border-radius:8px; background:#fff; padding:8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      display:flex; flex-direction:column; align-items:center;
+    }
+    .thumb img { width:140px; height:140px; object-fit:cover; border-radius:6px; }
+    .label { margin-top:8px; font-size:14px; text-align:center; }
+    .small { font-size:12px; color:#666; }
+
+    #progressWrap { margin-top:12px; height:10px; background:#f0f0f0; border-radius:6px; overflow:hidden; }
+    #progress { height:100%; width:0%; background:#4caf50; transition: width .15s ease; }
+
+    #log { margin-top:14px; font-family:monospace; color:#333; white-space:pre-wrap; }
+
+    #shortage { margin-top:14px; font-weight:bold; font-size:16px; }
+  </style>
+</head>
+<body>
+  <h1>📚 필통 자비스</h1>
+  <p style=”color:rgb(255, 0,0);”,class="lead">사용법: 연필,지우개,자,가위 이미지를 업로드하면 AI가 판단하고 부족한 학용품을 알려줍니다.(복수 이미지 업로드 가능)</p>
+
+  <div class="controls">
+    <input id="fileInput" type="file" accept="image/*" multiple>
+    <button id="clearBtn">초기화</button>
+  </div>
+
+  <div id="progressWrap" aria-hidden><div id="progress"></div></div>
+  <div id="preview"></div>
+  <div id="log" aria-live="polite"></div>
+  <div id="shortage"></div>
+
+  <script>
+    const MODEL_PATH = "./tm-my-image-model/";
+    let model = null;
+
+    const fileInput = document.getElementById('fileInput');
+    const preview = document.getElementById('preview');
+    const progressEl = document.getElementById('progress');
+    const logEl = document.getElementById('log');
+    const clearBtn = document.getElementById('clearBtn');
+
+    const thresholds = {
+      pencil: 1,
+      eraser: 1,
+      ruler: 1,
+      scissors: 1
+    };
+
+
+    const displayNames = {
+      pencil: "연필",
+      eraser: "지우개",
+      ruler: "자",
+      scissors: "가위"
+    };
+
+    function log(msg){
+      console.log(msg);
+      logEl.textContent += msg + "\n";
+    }
+
+    async function loadModel(){
+      try {
+        const modelURL = MODEL_PATH + "model.json";
+        const metadataURL = MODEL_PATH + "metadata.json";
+        model = await tmImage.load(modelURL, metadataURL);
+        
+      } catch (err) {   
+        
+        
+      }
+    }
+
+    async function predictImgElement(imgEl) {
+      if(!model) throw new Error("모델이 아직 로드되지 않았습니다.");
+      const preds = await model.predict(imgEl);
+      preds.sort((a,b)=>b.probability - a.probability);
+      return preds;
+    }
+
+
+    function renderMissingItems(counts) {
+      const shortageDiv = document.getElementById('shortage');
+      if (!shortageDiv) return;
+
+      const missing = [];
+      for (const label in thresholds) {
+        const have = counts[label] || 0;
+        if (have === 0) {
+          const name = displayNames[label] || label;
+          missing.push(name);
+        }
+      }
+
+      if (missing.length === 0) {
+        shortageDiv.innerHTML = '<span style="color:green"> 필통구성이 좋습니다.</span>';
+      } else {
+        shortageDiv.innerHTML = `<span style="color:#b33"> 필통이 어딘가 부족해 보입니다. 부족한 항목: ${missing.join(", ")}입니다.</span>`;
+      }
+    }
+
+    async function handleFiles(files){
+      preview.innerHTML = "";
+      logEl.textContent = "";
+      document.getElementById('shortage').innerHTML = "";
+      if(!files || files.length === 0) return;
+      
+
+      const arr = Array.from(files);
+      let done = 0;
+      progressEl.style.width = "0%";
+
+      const counts = {}; 
+
+      for(const file of arr){
+        const th = document.createElement('div');
+        th.className = 'thumb';
+        const img = document.createElement('img');
+        img.alt = file.name;
+        img.src = URL.createObjectURL(file);
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'label small';
+        labelDiv.textContent = '분류 중...';
+
+        th.appendChild(img);
+        th.appendChild(labelDiv);
+        preview.appendChild(th);
+
+        try {
+          await img.decode();
+          const preds = await predictImgElement(img);
+          const top = preds[0];
+          const top3 = preds.slice(0,3).map(p => `${p.className} ${(p.probability*100).toFixed(1)}%`).join(' | ');
+          labelDiv.textContent = `Top: ${top.className} ${(top.probability*100).toFixed(1)}%`;
+          const small = document.createElement('div');
+          small.className = 'small';
+          small.textContent = top3;
+          th.appendChild(small);
+
+          
+
+         
+        const label = Object.keys(displayNames).find(key => displayNames[key] === top.className) || top.className;
+        counts[label] = (counts[label] || 0) + 1;
+
+
+        } catch(err){
+          labelDiv.textContent = '오류';
+          
+        }
+
+        done++;
+        const pct = Math.round((done/arr.length)*100);
+        progressEl.style.width = pct + '%';
+      }
+
+  
+      renderMissingItems(counts);
+    }
+
+    fileInput.addEventListener('change', e => handleFiles(e.target.files));
+    clearBtn.addEventListener('click', ()=>{
+      preview.innerHTML = "";
+      logEl.textContent = "";
+      progressEl.style.width = "0%";
+      document.getElementById('shortage').innerHTML = "";
+      fileInput.value = "";
+    });
+
+    loadModel();
+  </script>
+</body>
+</html>
